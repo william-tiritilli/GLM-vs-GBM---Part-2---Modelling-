@@ -2,7 +2,7 @@
 
 # Load the data
 df<-read.csv("C:\\Users\\William\\Documents\\Data Science - ML\\Pricing Project_GLM_vs_GBM\\data.csv")
-```
+
 ### Model 1 - All variables
 
 dplyr::glimpse(df)
@@ -14,16 +14,14 @@ df$Power = factor(df$Power)
 df$Brand = factor(df$Brand)
 df$Region = factor(df$Region)
 df$Gas = factor(df$Gas)
-```
+
 
 # Set reference level for the data
 Power.expo=aggregate(df$Exposure, list(df$Power),sum)
 Brand.expo=aggregate(df$Exposure, list(df$Brand),sum)
 Region.expo=aggregate(df$Exposure, list(df$Region),sum)
 Gas.expo=aggregate(df$Exposure, list(df$Gas),sum)
-```
 
-```{r}
 #step 2: set the reference level
 df$Power = relevel(df$Power, ref=as.character(Power.expo$Group.1[which(Power.expo$x==max(Power.expo$x))]))
 df$Brand = relevel(df$Brand, ref=as.character(Brand.expo$Group.1[which(Brand.expo$x==max(Brand.expo$x))]))
@@ -31,17 +29,17 @@ df$Region = relevel(df$Region, ref=as.character(Region.expo$Group.1[which(Region
 df$Gas = relevel(df$Gas, ref=as.character(Gas.expo$Group.1[which(Gas.expo$x==max(Gas.expo$x))]))
 ```
 
-```{r}
+
 # Split train / test
 set.seed(564738291)
 u <- runif(dim(df)[1], min = 0, max = 1)
 df$train <- u < 0.7
 df$test <- !(df$train)
-```
+
 
 #### Modelling
 Start with a simple model with 3 predictors.
-```{r}
+
 # First simple model
 m1 <- glm(ClaimNb ~ DriverAge + Region + Density, 
           data =df,
@@ -49,9 +47,10 @@ m1 <- glm(ClaimNb ~ DriverAge + Region + Density,
           family = poisson(link = "log"),
           offset = log(Exposure))
 summary(m1)
-```
+
 We want to understand the potential gain of adding the other predictors to the first model. For that, we add successively a factor to the equation and compute the AIC and Deviance.
-```{r AIC and Deviance plot}
+
+
 # Create the grid
 result_grid2 <- expand.grid(
   covariates = c( 0,'Power', 'CarAge', 'Brand', 'Gas'),
@@ -76,9 +75,9 @@ for(i in seq_len(nrow(result_grid2))) {
   result_grid2$Deviance[i] <- f$deviance
 }
 print(result_grid2)
-```
+
 We can represent the results on a graph.
-```{r graph}
+
 library(ggplot2)
 scatter2 <- ggplot(result_grid2, aes(x=AIC, y=Deviance)) +
   geom_point() + # Show dots
@@ -91,18 +90,17 @@ scatter2 <- ggplot(result_grid2, aes(x=AIC, y=Deviance)) +
     title = "AIC and Deviance by added factor")
 print(scatter2)
 # the first model improves as we had a new covariates
-```
+
 Adding the Brand could be considered as an asset for the model. We observe that each model are performing better than the model "0", with the 3 predictors. Power improves the model but less than the other variables.
 
 ### Analysis of Deviance
-```{r}
+
 anova(m1, test = "Chisq")
-```
+
 All the parameters are statistically significant.
 
 ### Backward stepwise regression
-We can use an automatic procedure of selection to see if we need to keep all the predictors or not.
-```{r Backward stepwise regression}
+
 # Initialize a model with all predictors
 backward_model <- glm(ClaimNb ~ DriverAge + Region + Density + Power + CarAge + Brand + Gas, 
                       data = df,
@@ -112,19 +110,17 @@ backward_model <- glm(ClaimNb ~ DriverAge + Region + Density + Power + CarAge + 
 
 # Backward stepwise regression
 backward_model <- step(backward_model, direction = "backward")
-```
+
 As suggested by the previous graph, the variable Power does not have a significant impact on the claims frequency. It has been excluded by the backward selection.
 
-```{r Model - 6 predictors}
+
 m3 <- glm(ClaimNb ~ DriverAge + Region + Density + CarAge + Brand + Gas, 
           data = df,
           subset = train,
           family = poisson(link = "log"),
           offset = log(Exposure))
 summary(m3)
-```
 
-```{r work on Region}
 library(dplyr)
 df <- df %>%
   mutate(Region3 = case_when(
@@ -132,26 +128,24 @@ df <- df %>%
     TRUE ~ Region   # Keep other levels unchanged
   ))
 df %>% group_by(Region3) %>% summarise(count=n())
-```
-```{r}
+
 m3tris <- glm(ClaimNb ~ DriverAge + Region3 + Density + CarAge + Brand + Gas, 
               data = df,
               subset = train,
               family = poisson(link = "log"),
               offset = log(Exposure))
 summary(m3tris)
-```
-```{r}
+
 library(lmtest)
 lrtest(m3, m3tris)
-```
+
 Chosing the new model is an improvement.
 
 
 
 ### Relativity plot
 We want to see the relativity coefficient for the variable Region.
-```{r}
+
 # Aggregate exposure by category
 exposure_summary <- df %>%
   group_by(Region) %>%
@@ -224,6 +218,5 @@ ggplot(plot_data, aes(x = Category)) +
   ) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-```
 
 
