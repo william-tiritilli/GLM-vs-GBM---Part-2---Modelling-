@@ -1,11 +1,15 @@
+####################
+# Claims frequency #
+####################
 
+# Main Library
+library(dplyr)
+library(ggplot2)
 
 # Load the data
 df<-read.csv("C:\\Users\\William\\Documents\\Data Science - ML\\Pricing Project_GLM_vs_GBM\\data.csv")
 
 ### Model 1 - All variables
-
-dplyr::glimpse(df)
 
 #### Transformation of categorical into factors.
 
@@ -14,7 +18,6 @@ df$Power = factor(df$Power)
 df$Brand = factor(df$Brand)
 df$Region = factor(df$Region)
 df$Gas = factor(df$Gas)
-
 
 # Set reference level for the data
 Power.expo=aggregate(df$Exposure, list(df$Power),sum)
@@ -27,8 +30,6 @@ df$Power = relevel(df$Power, ref=as.character(Power.expo$Group.1[which(Power.exp
 df$Brand = relevel(df$Brand, ref=as.character(Brand.expo$Group.1[which(Brand.expo$x==max(Brand.expo$x))]))
 df$Region = relevel(df$Region, ref=as.character(Region.expo$Group.1[which(Region.expo$x==max(Region.expo$x))]))
 df$Gas = relevel(df$Gas, ref=as.character(Gas.expo$Group.1[which(Gas.expo$x==max(Gas.expo$x))]))
-```
-
 
 # Split train / test
 set.seed(564738291)
@@ -38,7 +39,7 @@ df$test <- !(df$train)
 
 
 #### Modelling
-Start with a simple model with 3 predictors.
+# Start with a simple model with 3 predictors.
 
 # First simple model
 m1 <- glm(ClaimNb ~ DriverAge + Region + Density, 
@@ -48,19 +49,21 @@ m1 <- glm(ClaimNb ~ DriverAge + Region + Density,
           offset = log(Exposure))
 summary(m1)
 
-We want to understand the potential gain of adding the other predictors to the first model. For that, we add successively a factor to the equation and compute the AIC and Deviance.
+# We want to understand the potential gain of adding the other predictors to the first model. 
+# For that, we add successively a factor to the equation and compute the AIC and Deviance.
 
+glimpse(df)
 
 # Create the grid
-result_grid2 <- expand.grid(
+result_grid <- expand.grid(
   covariates = c( 0,'Power', 'CarAge', 'Brand', 'Gas'),
   AIC = NA,
   Deviance = NA)
 
 # Iterate through the model
-for(i in seq_len(nrow(result_grid2))) {
+for(i in seq_len(nrow(result_grid))) {
   fmla <- as.formula(paste("ClaimNb ~ DriverAge + Region + Density", 
-                           result_grid2$covariates[i],sep = "+"))
+                           result_grid$covariates[i],sep = "+"))
   f <- glm(fmla,
            data = df,
            subset = train,
@@ -71,33 +74,31 @@ for(i in seq_len(nrow(result_grid2))) {
   #predict(f, newdata = dta[dta$train,],
   #type = "response"))
   # print(fmla)
-  result_grid2$AIC[i] <- f$aic
-  result_grid2$Deviance[i] <- f$deviance
+  result_grid$AIC[i] <- f$aic
+  result_grid$Deviance[i] <- f$deviance
 }
-print(result_grid2)
+print(result_grid)
 
-We can represent the results on a graph.
-
-library(ggplot2)
-scatter2 <- ggplot(result_grid2, aes(x=AIC, y=Deviance)) +
+# We can represent the results on a graph.
+scatter <- ggplot(result_grid, aes(x=AIC, y=Deviance)) +
   geom_point() + # Show dots
   geom_text(
-    label=result_grid2$covariates, 
+    label=result_grid$covariates, 
     nudge_x = 0.25, nudge_y = 0.25, 
     check_overlap = T
   ) +
   labs(
-    title = "AIC and Deviance by added factor")
-print(scatter2)
-# the first model improves as we had a new covariates
+    title = "AIC and Deviance for adding one single factor")
+print(scatter)
 
-Adding the Brand could be considered as an asset for the model. We observe that each model are performing better than the model "0", with the 3 predictors. Power improves the model but less than the other variables.
+# Adding the Brand could be considered as an asset for the model. 
+# We observe that each model are performing better than the model "0", with the 3 predictors. 
+# Power improves the model but less than the other variables.
 
 ### Analysis of Deviance
-
 anova(m1, test = "Chisq")
 
-All the parameters are statistically significant.
+# All the parameters are statistically significant.
 
 ### Backward stepwise regression
 
@@ -111,8 +112,8 @@ backward_model <- glm(ClaimNb ~ DriverAge + Region + Density + Power + CarAge + 
 # Backward stepwise regression
 backward_model <- step(backward_model, direction = "backward")
 
-As suggested by the previous graph, the variable Power does not have a significant impact on the claims frequency. It has been excluded by the backward selection.
-
+# As suggested by the previous graph, the variable Power does not have a significant impact on the claims frequency. 
+# It has been excluded by the backward selection.
 
 m3 <- glm(ClaimNb ~ DriverAge + Region + Density + CarAge + Brand + Gas, 
           data = df,
