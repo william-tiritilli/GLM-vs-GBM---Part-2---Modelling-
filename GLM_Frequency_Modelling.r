@@ -5,6 +5,7 @@
 # Main Library
 library(dplyr)
 library(ggplot2)
+library(lmtest) # for the Likelihood ratio test
 
 # Load the data
 df<-read.csv("C:\\Users\\William\\Documents\\Data Science - ML\\Pricing Project_GLM_vs_GBM\\data.csv")
@@ -114,7 +115,6 @@ backward_model <- step(backward_model, direction = "backward")
 
 # As suggested by the previous graph, the variable Power does not have a significant impact on the claims frequency. 
 # It has been excluded by the backward selection.
-
 m3 <- glm(ClaimNb ~ DriverAge + Region + Density + CarAge + Brand + Gas, 
           data = df,
           subset = train,
@@ -122,7 +122,52 @@ m3 <- glm(ClaimNb ~ DriverAge + Region + Density + CarAge + Brand + Gas,
           offset = log(Exposure))
 summary(m3)
 
-library(dplyr)
+# Intermediary step on Region
+
+# Another variable: Region 
+with(df, table(Region, ClaimNb))
+
+m_region <- glm(formula = ClaimNb ~ Region,
+          family = poisson(link = "log"),
+          data = df,
+          subset = train, offset = log(Exposure))
+summary(m_region)
+# The "Normandie" region is not significant
+
+# Isolate the region's name
+region_name <- df %>% group_by(Region) %>% summarise(count=n())
+
+# Run a prediction for each of the Region
+# We retrieve 10 avg frequency
+y=predict(m_region,newdata=
+            data.frame(Region=region_name$Region,
+                       Exposure=1),type="response", 
+          se.fit =TRUE) # we add the CI
+
+# Predictions and CI
+pred_values <- y$fit
+lower_CI <- y$fit-y$se.fit
+upper_CI <- y$fit+y$se.fit
+
+# Definition of the region for each prediction
+vec_Region <-c("Centre", "Aquitaine", "Basse-Normandie", "Bretagne", "Haute-Normandie", "Ile-de-France", "Limousin", "Nord-Pas-de-Calais", "Pays-de-la-Loire", "Poitou-Charentes")
+
+# Create the data frame
+predicted_df <- data.frame(predicted_value=pred_values, Region = vec_Region, upper = upper_CI, lower = lower_CI)
+
+#print(predicted_df)
+
+# Create a bar plot with ggplot2
+ggplot(predicted_df, aes(x = Region, y = predicted_value)) +
+  geom_bar(stat = "identity",fill = "skyblue", color = "black") +
+  geom_errorbar(aes(ymin = lower, ymax = upper), 
+                width = 0.2, color = "red") +
+  labs(title = "Claims frequency by Region", x = "Region", y = "Predicted value") +
+  theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# We can attempt some grouping
+
+
 df <- df %>%
   mutate(Region3 = case_when(
     Region %in% c("Basse-Normandie", "Haute-Normandie", "Bretagne", "Centre","Aquitaine","Pays-de-la-Loire", "Poitou-Charentes") ~ "Group_Ouest",
@@ -130,6 +175,7 @@ df <- df %>%
   ))
 df %>% group_by(Region3) %>% summarise(count=n())
 
+# New model with new Region 
 m3tris <- glm(ClaimNb ~ DriverAge + Region3 + Density + CarAge + Brand + Gas, 
               data = df,
               subset = train,
@@ -137,15 +183,33 @@ m3tris <- glm(ClaimNb ~ DriverAge + Region3 + Density + CarAge + Brand + Gas,
               offset = log(Exposure))
 summary(m3tris)
 
-library(lmtest)
+# Likelhod Ratio test
 lrtest(m3, m3tris)
 
-Chosing the new model is an improvement.
+# Chosing the new model is an improvement.
 
+
+# Saving the model
+saveRDS(m3tris, file = "models/GLM_clm_freq.rda")
+saveRDS(m3, file = "models/GLM_clm_freq_v1.rda")
+
+
+#loading the model
+#model_old = readRDS("models/GLM_clm_freq.rda")
+
+#checking whether the model has been loaded with different name
+# ls()
+
+
+# Prediction on the model
+test <- df %>% filter(test == TRUE)
+
+pred <- predict(m3, test, type = "response")
+head(pred)
 
 
 ### Relativity plot
-We want to see the relativity coefficient for the variable Region.
+# We want to see the relativity coefficient for the variable Region.
 
 # Aggregate exposure by category
 exposure_summary <- df %>%
@@ -172,7 +236,7 @@ print(relativities)
 #glm_model$xlevels
 
 # Add baseline relativity (for reference)
-baseline <- data.frame(Category = "Aquitaine", Relativity = 1)
+baseline <- data.frame(Category = "Centre", Relativity = 1)
 relativities <- bind_rows(baseline, relativities)
 print(baseline)
 print(relativities)
@@ -213,7 +277,7 @@ ggplot(plot_data, aes(x = Category)) +
   geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
   theme_minimal() +
   labs(
-    title = "Relativity and Exposure Graph",
+    title = "Relativity and Exposure Graph - Region",
     x = "Category",
     caption = "Dashed line indicates baseline relativity"
   ) +
