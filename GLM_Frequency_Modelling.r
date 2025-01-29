@@ -1,6 +1,6 @@
-####################
-# Claims frequency #
-####################
+############################################################
+# Modelling - Part 1.a - GLM - Claims Frequency estimation #
+############################################################
 
 # Main Library
 library(dplyr)
@@ -282,6 +282,4 @@ ggplot(plot_data, aes(x = Category)) +
     caption = "Dashed line indicates baseline relativity"
   ) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-
 
