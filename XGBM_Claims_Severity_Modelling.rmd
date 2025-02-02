@@ -1,0 +1,288 @@
+---
+title: "XGBM_Claims_Severity_Modelling"
+output: html_document
+---
+
+### Modelling Car Insurance Claims Severity with XGBoost
+In this markdown, we want to estimate the severity of a claim using Extreme Gradient Boosting in R.
+
+```{r}
+# Load the data
+df<-read.csv("C:\\Users\\William\\Documents\\Data Science - ML\\Pricing Project_GLM_vs_GBM\\data.csv")
+```
+
+```{r}
+# Replace the NS by 0 and filter only on claims greater than 0.
+suppressMessages(suppressWarnings(library(dplyr)))
+df <- df %>% mutate(ClaimAmount = ifelse(is.na(ClaimAmount), 0, ClaimAmount)) %>% filter(ClaimAmount > 0)
+
+# Train and Test sets
+set.seed(564738291)
+u <- runif(dim(df)[1], min = 0, max = 1)
+df$train <- u < 0.7
+df$test <- !(df$train)
+```
+
+We use the package {vtreat} to perform a one-hot encoding on the potential predictors.
+```{r}
+# Applies vtreat to one-hot encode the training and testing data sets
+suppressMessages(suppressWarnings(library(vtreat)))
+suppressMessages(suppressWarnings(library(dplyr)))
+
+# variable names
+# Isolate the outcome from the potential predictors and the Exposure
+df_train <- df%>% filter(train == TRUE) %>% select(ClaimAmount, ClaimNb, Exposure,
+                                                   Power, CarAge, DriverAge, Brand, Gas, Region, Density)
+df_test <- df%>% filter(test == TRUE) %>% select(ClaimAmount, ClaimNb, Exposure,
+                                                 Power, CarAge, DriverAge, Brand, Gas, Region, Density)
+features <- setdiff(names(df_train), c("ClaimAmount", "Exposure"))
+#print(features)
+
+# Create the treatment plan from the training data selecting only the features to be used for the training
+treatplan <- vtreat::designTreatmentsZ(df_train, features, verbose = FALSE)
+#print(treatplan)
+
+# Get the "clean" variable names from the scoreFrame
+new_vars <- treatplan %>%
+  magrittr::use_series(scoreFrame) %>%        
+  dplyr::filter(code %in% c("clean", "lev")) %>% 
+  magrittr::use_series(varName)  
+
+# print only the 10 first encoded variable
+print(head(new_vars,10)) 
+```
+
+Then we prepare the train and test sets.
+```{r}
+# Prepare the training data
+features_train <- vtreat::prepare(treatplan, df_train, varRestriction = new_vars) %>% as.matrix()
+response_train <- df_train$ClaimAmount/df_train$ClaimNb # Need the average severity
+
+# Prepare the test data
+features_test <- vtreat::prepare(treatplan, df_test, varRestriction = new_vars) %>% as.matrix()
+response_test <- df_test$ClaimAmount/df_train$ClaimNb
+#response_test2 <- df_test$ClaimNb
+
+# dimensions of one-hot encoded data
+#suppressWarnings(dim(features_train))
+#suppressWarnings(dim(features_test))
+
+# Remove the ClaimNb in both sets
+features_train <- subset(features_train, select = -ClaimNb)
+features_test <- subset(features_test, select = -ClaimNb)
+```
+
+### Training a first model
+```{r}
+# create parameter list
+params_list <- list(
+  eta = .3,
+  max_depth = 5,
+  min_child_weight = 2,
+  subsample = .8,
+  colsample_bytree = .9
+)
+
+library(xgboost)
+# First model
+# Here it incorporates the cross-validation
+system.time(xgb.fit.sev <- xgb.cv(
+  data = features_train,
+  label = response_train, #number claims / exposure for frequency and average claim for severity.
+  params = params_list,
+  nrounds = 500,# number of trees
+  nfold = 5,
+  booster = 'gbtree',
+  objective = "reg:gamma",  # for severity model
+  #eval-metric = "poisson-nloglik", # Negative Log Likelohood, as evaluation metric by default
+  tree_method = "hist",
+  verbose = 0               # silent,
+))
+
+# Check results
+#head(xgb.fit.sev$evaluation_log)
+
+# get number of trees that minimize error
+xgb.fit.sev$evaluation_log %>%
+  dplyr::summarise(
+    ntrees.train = which(train_gamma_nloglik_mean == min(train_gamma_nloglik_mean))[1],
+    log_lik.train   = min(train_gamma_nloglik_mean),
+    ntrees.test  = which(test_gamma_nloglik_mean == min(test_gamma_nloglik_mean))[1],
+    log_lik.test   = min(test_gamma_nloglik_mean),
+  )
+# ntrees.train log_lik.train ntrees.test log_lik.test
+# 1          500     7.949184	45	8.675533
+```
+
+```{r}
+library(ggplot2)
+# plot error vs number trees
+ggplot2::ggplot(xgb.fit.sev$evaluation_log) +
+  geom_line(aes(iter, train_gamma_nloglik_mean), color = "red") +
+  geom_line(aes(iter, test_gamma_nloglik_mean), color = "blue") + ggtitle("Neg LogLikelihood Evo")
+```
+
+Train and test error are following the same path.
+
+### Run a grid search
+An example of grid below that has been run, with 32 parameters.
+```{r}
+#####################
+# Run a grid search #
+#####################
+
+# create hyperparameter grid
+hyper_grid <- expand.grid(
+  eta = c(.01, .05),
+  max_depth = c(1, 3),
+  min_child_weight = c(1, 3),
+  subsample = c(.65, .8),
+  colsample_bytree = c(.8, .9),
+  optimal_trees = 0,               # a place to dump results
+  min_log_lik = 0                     # a place to dump results
+)
+
+nrow(hyper_grid)
+```
+Iteration through the grid search:
+```{r}
+# grid search
+system.time(for(i in 1:nrow(hyper_grid)) {
+
+  # create parameter list
+  params <- list(
+    eta = hyper_grid$eta[i],
+    max_depth = hyper_grid$max_depth[i],
+    min_child_weight = hyper_grid$min_child_weight[i],
+    subsample = hyper_grid$subsample[i],
+    colsample_bytree = hyper_grid$colsample_bytree[i]
+  )
+
+  # reproducibility
+  set.seed(123)
+
+  # train model
+  xgb.tune <- xgb.cv(
+    params = params,
+    data = features_train,
+    label = response_train,
+    nrounds = 500,
+    nfold = 5,
+    objective = "reg:gamma",  # for regression models
+    tree_method = "hist",
+    verbose = 0,               # silent,
+    early_stopping_rounds = 10 # stop if no improvement for 10 consecutive trees
+  )
+
+  # add min training error and trees to grid
+  hyper_grid$optimal_trees[i] <- which.min(xgb.tune$evaluation_log$test_gamma_nloglik_mean)
+  hyper_grid$log_lik[i] <- min(xgb.tune$evaluation_log$test_gamma_nloglik_mean)
+})
+
+```
+
+Results
+```{r}
+# Results
+hyper_grid %>%
+  dplyr::arrange(log_lik) %>%
+  head(10)
+```
+
+### Run the model with the optimal parameters
+We run the model based on the parameters from the experiment above.
+```{r}
+#########################
+# Run the optimal model #
+#########################
+
+# Use the xgb.DMatrix to format the data
+
+# Remove the ClaimNb from the data
+df_train2 <- subset(df_train, select = -c(ClaimAmount, ClaimNb))
+#glimpse(df_train2)
+#glimpse(df_train)
+
+# Formating the data
+dtrain <- xgb.DMatrix(data = data.matrix(df_train2), label = df_train$ClaimAmount/df_train$ClaimNb, weight=df_train$Exposure)
+#glimpse(dtrain)
+
+# create parameter list
+params_list3 <- list(
+  eta = .05,
+  max_depth = 1, # choice a stump tree
+  min_child_weight = 1,
+  subsample = .65,
+  colsample_bytree = .8
+)
+
+# Fit the model with the obtained parameters
+system.time(xgb.fit.sev.bis <- xgboost(
+  data = features_train,
+  label = response_train, #number claims / exposure
+  params = params_list3,
+  nrounds = 240,# number of trees
+  objective = "reg:gamma",  # for countinf model
+  tree_method = "hist",
+  verbose = 0               # silent,
+))
+
+```
+
+### Visuals
+
+Here we focus on the Gain, which stands for the relative contribution of the corresponding feature to the model calculated by taking each feature’s contribution for each tree in the model.
+```{r}
+# create importance matrix
+importance_matrix <- xgb.importance(model = xgb.fit.sev.bis)
+print(importance_matrix)
+
+# variable importance plot
+xgb.plot.importance(importance_matrix, top_n = 10, measure = "Gain")
+#?xgb.plot.importance
+
+# Save the model
+xgb.save(xgb.fit.sev.bis, "xgbm_Claims_sev")
+```
+#### Variable Importance Plot (VIP)
+```{r}
+xgb.plot.importance(importance_matrix, top_n = 10, measure = "Frequency")
+```
+
+```{r}
+xgb.plot.importance(importance_matrix, top_n = 10, measure = "Cover")
+```
+
+```{r}
+#install.packages("DiagrammeR")
+library(DiagrammeR)
+xgb.plot.tree(feature_names = colnames(features_train),
+              model = xgb.fit.sev.bis,
+              trees = 0)
+
+# ?interaction.plot
+# interaction.plot(train.comb.cxl$MileBand,train.comb.cxl$TermBand,train.comb.cxl$ClaimCnt,sum)
+
+# Partial Dependance Plot (PDP)
+```
+
+```{r}
+# Better to use them with Continuous variable
+pdp <- xgb.fit.sev.bis %>%
+  pdp::partial(pred.var = "DriverAge", n.trees = 500, grid.resolution = 100, train = features_train) %>%
+  autoplot(rug = TRUE, train = features_train) +
+  scale_y_continuous(labels = scales::dollar) +
+  ggtitle("PDP")
+
+#print(pdp)
+
+ice <- xgb.fit.sev.bis %>%
+  pdp::partial(pred.var = "DriverAge", n.trees = 500, grid.resolution = 100, train = features_train, ice = TRUE) %>%
+  autoplot(rug = TRUE, train = features_train, alpha = .1, center = TRUE) +
+  scale_y_continuous(labels = scales::dollar) +
+  ggtitle("ICE")
+
+#plot(ice)
+
+gridExtra::grid.arrange(pdp, ice, nrow = 1)
+```
