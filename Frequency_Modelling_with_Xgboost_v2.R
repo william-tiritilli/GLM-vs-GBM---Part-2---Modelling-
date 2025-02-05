@@ -29,7 +29,7 @@ library(vip)         # for feature importance
 library(pdp)         # for feature effects
 
 # Load the data
-df = read.csv("C:\\Users\\William.Tiritilli\\Documents\\Project P\\Pricing Project\\data.csv")
+df = read.csv("C:\\Users\\William\\Documents\\Data Science - ML\\Pricing Project_GLM_vs_GBM\\data.csv")
 
 ####################
 # Claims Frequency #
